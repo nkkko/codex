@@ -12,7 +12,7 @@ import { SandboxType } from "./sandbox/interface.js";
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { access } from "fs/promises";
-import { getSandboxType } from "../session.js";
+import { getSandboxType, setSandboxType } from "../session.js";
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -258,20 +258,39 @@ const isInContainer = async (): Promise<boolean> => {
   }
 };
 
+/**
+ * Determines the appropriate sandbox type to use based on configuration and environment
+ * @param runInSandbox - Whether to run in a sandboxed environment
+ * @returns The determined sandbox type
+ */
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
   // First check for configured sandbox type from config/session
   const configuredSandbox = getSandboxType();
   if (configuredSandbox !== SandboxType.NONE) {
+    if (isLoggingEnabled()) {
+      log(`Using configured sandbox type: ${configuredSandbox}`);
+    }
     return configuredSandbox;
   }
 
   if (runInSandbox) {
-    // Check for Daytona API key to prioritize Daytona sandbox if available
-    if (process.env.DAYTONA_API_KEY) {
+    // Check if command should run in Daytona sandbox when available
+    if (process.env.DAYTONA_API_KEY || process.env.DAYTONA_API_URL) {
+      if (isLoggingEnabled()) {
+        log("Using Daytona Cloud sandbox (DAYTONA_API_KEY detected)");
+      }
+      // Properly set the sandbox type in the session to ensure consistency
+      setSandboxType(SandboxType.DAYTONA);
       return SandboxType.DAYTONA;
     } else if (process.platform === "darwin") {
+      if (isLoggingEnabled()) {
+        log("Using macOS Seatbelt sandbox");
+      }
       return SandboxType.MACOS_SEATBELT;
     } else if (await isInContainer()) {
+      if (isLoggingEnabled()) {
+        log("Running in container - using no sandbox");
+      }
       return SandboxType.NONE;
     }
     throw new Error("Sandbox was mandated, but no sandbox is available!");
