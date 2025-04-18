@@ -184,13 +184,23 @@ function TerminalChatResponseToolCallOutput({
         .join(", "),
     [exit_code, duration_seconds],
   );
-  let displayedContent = output;
+  
+  // Ensure we have a string to display, with a fallback to prevent runtime errors
+  let displayedContent = typeof output === 'string' ? output : String(output || '');
+  
   if (message.type === "function_call_output" && !fullStdout) {
-    const lines = displayedContent.split("\n");
-    if (lines.length > 4) {
-      const head = lines.slice(0, 4);
-      const remaining = lines.length - 4;
-      displayedContent = [...head, `... (${remaining} more lines)`].join("\n");
+    // Safely split the content - ensure we have a string that can be split
+    try {
+      const lines = displayedContent.split("\n");
+      if (lines.length > 4) {
+        const head = lines.slice(0, 4);
+        const remaining = lines.length - 4;
+        displayedContent = [...head, `... (${remaining} more lines)`].join("\n");
+      }
+    } catch (err) {
+      // If split fails for any reason, just use the original content
+      console.error("Error processing output content:", err);
+      // No need to modify displayedContent - keep using the original
     }
   }
 
@@ -201,18 +211,25 @@ function TerminalChatResponseToolCallOutput({
   // the default color. This is a best‑effort heuristic and should be safe for
   // non‑diff output – only the very first character of a line is inspected.
   // -------------------------------------------------------------------------
-  const colorizedContent = displayedContent
-    .split("\n")
-    .map((line) => {
-      if (line.startsWith("+") && !line.startsWith("++")) {
-        return chalk.green(line);
-      }
-      if (line.startsWith("-") && !line.startsWith("--")) {
-        return chalk.red(line);
-      }
-      return line;
-    })
-    .join("\n");
+  let colorizedContent;
+  try {
+    colorizedContent = displayedContent
+      .split("\n")
+      .map((line) => {
+        if (line.startsWith("+") && !line.startsWith("++")) {
+          return chalk.green(line);
+        }
+        if (line.startsWith("-") && !line.startsWith("--")) {
+          return chalk.red(line);
+        }
+        return line;
+      })
+      .join("\n");
+  } catch (err) {
+    // If colorization fails, just use the uncolorized content
+    colorizedContent = displayedContent;
+  }
+  
   return (
     <Box flexDirection="column" gap={1}>
       <Text color="magenta" bold>

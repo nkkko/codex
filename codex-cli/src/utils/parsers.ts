@@ -15,15 +15,44 @@ export function parseToolCallOutput(toolCallOutput: string): {
   output: string;
   metadata: ExecOutputMetadata;
 } {
-  try {
-    const { output, metadata } = JSON.parse(toolCallOutput);
+  // Ensure we have a valid non-empty string to work with
+  if (!toolCallOutput || typeof toolCallOutput !== 'string') {
     return {
-      output,
+      output: `Empty or invalid output`,
+      metadata: {
+        exit_code: 1,
+        duration_seconds: 0,
+      },
+    };
+  }
+
+  try {
+    // Try to parse as JSON
+    const { output, metadata } = JSON.parse(toolCallOutput);
+    
+    // Ensure the output is a string to prevent split() errors
+    return {
+      output: typeof output === 'string' ? output : String(output || ''),
       metadata,
     };
   } catch (err) {
+    // If the JSON parsing fails, check if this is a raw patch output
+    // This handles cases where apply_patch output wasn't properly wrapped in JSON
+    if (toolCallOutput.includes('*** Begin Patch') || 
+        toolCallOutput.includes('*** Add File:') ||
+        toolCallOutput.includes('Created ')) {
+      return {
+        output: toolCallOutput,
+        metadata: {
+          exit_code: 0,
+          duration_seconds: 0,
+        },
+      };
+    }
+
+    // Default fallback
     return {
-      output: `Failed to parse JSON result`,
+      output: `Failed to parse output: ${toolCallOutput.substring(0, 100)}${toolCallOutput.length > 100 ? '...' : ''}`,
       metadata: {
         exit_code: 1,
         duration_seconds: 0,

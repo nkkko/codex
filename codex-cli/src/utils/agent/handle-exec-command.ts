@@ -12,6 +12,7 @@ import { SandboxType } from "./sandbox/interface.js";
 import { canAutoApprove } from "../../approvals.js";
 import { formatCommandForDisplay } from "../../format-command.js";
 import { access } from "fs/promises";
+import { getSandboxType } from "../session.js";
 
 // ---------------------------------------------------------------------------
 // Session‑level cache of commands that the user has chosen to always approve.
@@ -258,8 +259,17 @@ const isInContainer = async (): Promise<boolean> => {
 };
 
 async function getSandbox(runInSandbox: boolean): Promise<SandboxType> {
+  // First check for configured sandbox type from config/session
+  const configuredSandbox = getSandboxType();
+  if (configuredSandbox !== SandboxType.NONE) {
+    return configuredSandbox;
+  }
+
   if (runInSandbox) {
-    if (process.platform === "darwin") {
+    // Check for Daytona API key to prioritize Daytona sandbox if available
+    if (process.env.DAYTONA_API_KEY) {
+      return SandboxType.DAYTONA;
+    } else if (process.platform === "darwin") {
       return SandboxType.MACOS_SEATBELT;
     } else if (await isInContainer()) {
       return SandboxType.NONE;

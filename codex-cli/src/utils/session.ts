@@ -1,3 +1,5 @@
+import { SandboxType } from "./agent/sandbox/interface.js";
+
 export const CLI_VERSION = "0.1.2504161510"; // Must be in sync with package.json.
 export const ORIGIN = "codex_cli_ts";
 
@@ -14,6 +16,8 @@ export type TerminalChatSession = {
   timestamp: string;
   /** Optional custom instructions that were active for the run */
   instructions: string;
+  /** The sandbox type used for command execution */
+  sandboxType?: string;
 };
 
 let sessionId = "";
@@ -35,6 +39,7 @@ export function getSessionId(): string {
 }
 
 let currentModel = "";
+let currentSandboxType: SandboxType = SandboxType.NONE;
 
 /**
  * Record the model that is currently being used for the conversation.
@@ -50,4 +55,30 @@ export function setCurrentModel(model: string): void {
  */
 export function getCurrentModel(): string {
   return currentModel;
+}
+
+/**
+ * Record the sandbox type currently being used for command execution.
+ */
+export function setSandboxType(type: SandboxType): void {
+  currentSandboxType = type;
+  // Also set as environment variable for child processes
+  process.env.CODEX_SANDBOX_TYPE = type;
+}
+
+/**
+ * Get the current sandbox type used for command execution.
+ * Prioritizes environment variable, then falls back to the stored value.
+ */
+export function getSandboxType(): SandboxType {
+  // Environment variable overrides the session value (useful for tests and configuration)
+  if (process.env.CODEX_SANDBOX_TYPE) {
+    const envSandbox = process.env.CODEX_SANDBOX_TYPE;
+    if (Object.values(SandboxType).includes(envSandbox as SandboxType)) {
+      return envSandbox as SandboxType;
+    }
+  }
+  
+  // Fallback to session value
+  return currentSandboxType;
 }

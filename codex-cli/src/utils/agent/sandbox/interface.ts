@@ -2,6 +2,7 @@ export enum SandboxType {
   NONE = "none",
   MACOS_SEATBELT = "macos.seatbelt",
   LINUX_LANDLOCK = "linux.landlock",
+  DAYTONA = "daytona.cloud",
 }
 
 export type ExecInput = {

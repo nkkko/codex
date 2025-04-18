@@ -49,6 +49,7 @@ export type StoredConfig = {
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  sandboxType?: string;
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -70,6 +71,7 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  sandboxType?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -313,6 +315,10 @@ export const loadConfig = (
     config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
   }
 
+  if (storedConfig.sandboxType) {
+    config.sandboxType = storedConfig.sandboxType;
+  }
+
   return config;
 };
 
@@ -341,12 +347,17 @@ export const saveConfig = (
   }
 
   const ext = extname(targetPath).toLowerCase();
+  const configToSave = { 
+    model: config.model,
+    sandboxType: config.sandboxType,
+  };
+
   if (ext === ".yaml" || ext === ".yml") {
-    writeFileSync(targetPath, dumpYaml({ model: config.model }), "utf-8");
+    writeFileSync(targetPath, dumpYaml(configToSave), "utf-8");
   } else {
     writeFileSync(
       targetPath,
-      JSON.stringify({ model: config.model }, null, 2),
+      JSON.stringify(configToSave, null, 2),
       "utf-8",
     );
   }
