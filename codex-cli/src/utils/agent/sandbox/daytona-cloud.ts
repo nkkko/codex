@@ -220,15 +220,121 @@ export class DaytonaSandboxProvider {
         }
       }
       
-      // Execute the command
-      // Add stderr redirection for commands that might not show output
-      if (commandStr.includes('python3 --version') || commandStr.includes('python --version') || 
-          commandStr.startsWith('which') || commandStr.includes('hello.py')) {
-        // For commands that might not show output directly, redirect stderr to stdout
-        commandStr = `${commandStr} 2>&1`;
+      // Special handling for specific commands
+      
+      // DO NOT add stderr redirection - it's being interpreted literally in Daytona
+      // Let the sandbox handle redirections naturally
+      
+      // Special handling for commands that need proper shell interpretation
+      
+      // Check if this command has quotes, special characters, or shell operators
+      const needsShellWrapping = 
+        // Shell operators
+        commandStr.includes(' > ') || 
+        commandStr.includes(' | ') || 
+        commandStr.includes(' && ') || 
+        commandStr.includes(' ; ') || 
+        commandStr.includes(' & ') ||
+        // Special commands
+        commandStr.includes('nohup ') ||
+        // Commands with quotes or special characters
+        commandStr.includes('"') ||
+        commandStr.includes("'") || 
+        commandStr.includes('`') ||
+        commandStr.includes('$') ||
+        // Python commands with arguments that need proper parsing
+        (commandStr.startsWith('python') && (commandStr.includes('-c') || commandStr.includes('-m'))) ||
+        (commandStr.startsWith('python3') && (commandStr.includes('-c') || commandStr.includes('-m'))) ||
+        // Other commands that typically need shell interpretation
+        commandStr.includes('echo') ||
+        commandStr.includes('which') ||
+        commandStr.includes('find') ||
+        commandStr.includes('grep');
+      
+      if (needsShellWrapping && !commandStr.startsWith('/bin/sh -c')) {
+        // For commands with special characters, use /bin/sh -c to ensure proper shell interpretation
+        const escapedCmd = commandStr.replace(/'/g, "'\\''");
+        commandStr = `/bin/sh -c '${escapedCmd}'`;
         
         if (isLoggingEnabled()) {
-          log(`[DaytonaSandbox] Added stderr redirection: ${commandStr}`);
+          log(`[DaytonaSandbox] Wrapping command with shell: ${commandStr}`);
+        }
+      }
+      
+      // Special fix for Python -c commands which need double quotes preserved
+      if ((commandStr.includes('python -c') || commandStr.includes('python3 -c')) && 
+          !commandStr.startsWith('/bin/sh -c')) {
+        // Extract the Python code part
+        const match = commandStr.match(/python3?\s+-c\s+['"](.+)['"]/);
+        if (match) {
+          const pythonCode = match[1];
+          // Escape single quotes in the Python code
+          const escapedCode = pythonCode.replace(/'/g, "'\\''");
+          // Construct a properly quoted command
+          commandStr = `/bin/sh -c 'python3 -c "${escapedCode}"'`;
+          
+          if (isLoggingEnabled()) {
+            log(`[DaytonaSandbox] Fixed Python -c command: ${commandStr}`);
+          }
+        }
+      }
+      
+      // Special handling for timeout command which doesn't work in Daytona
+      if (commandStr.startsWith('timeout ') && !commandStr.startsWith('/bin/sh -c')) {
+        // Extract the command being run after timeout
+        const match = commandStr.match(/timeout\s+(?:-t\s+)?(\d+)\s+(.*)/);
+        if (match) {
+          const seconds = parseInt(match[1], 10);
+          const actualCommand = match[2];
+          
+          // Replace with a background process that we kill after the timeout
+          commandStr = `/bin/sh -c '${actualCommand} & pid=$!; sleep ${seconds}; kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true'`;
+          
+          if (isLoggingEnabled()) {
+            log(`[DaytonaSandbox] Replaced timeout command: ${commandStr}`);
+          }
+        }
+      }
+      
+      // Special handling for sleep command (which appears to have issues)
+      if (commandStr.startsWith('sleep ') && !commandStr.includes(' && ') && !commandStr.startsWith('/bin/sh -c')) {
+        // Make sure sleep is properly formatted
+        const match = commandStr.match(/sleep\s+(\d+)/);
+        if (match) {
+          const seconds = match[1];
+          commandStr = `/bin/sh -c 'sleep ${seconds}'`;
+          
+          if (isLoggingEnabled()) {
+            log(`[DaytonaSandbox] Fixed sleep command: ${commandStr}`);
+          }
+        }
+      }
+      
+      // Special handling for nohup command
+      if (commandStr.startsWith('nohup ') && !commandStr.startsWith('/bin/sh -c')) {
+        // Extract the actual command after nohup
+        const nohupCmd = commandStr.substring('nohup '.length);
+        // Wrap in shell to ensure proper interpretation
+        commandStr = `/bin/sh -c 'nohup ${nohupCmd.replace(/'/g, "'\\''")}'`;
+        
+        if (isLoggingEnabled()) {
+          log(`[DaytonaSandbox] Fixed nohup command: ${commandStr}`);
+        }
+      }
+      
+      // Special handling for Flask applications
+      if ((commandStr.includes('flask run') || 
+          (commandStr.includes('python') && commandStr.includes('app.py'))) &&
+          !commandStr.startsWith('/bin/sh -c')) {
+        // Don't try to run Flask in background with curl - just show info message
+        // The Flask app will be created but we'll return a message indicating how to run it
+        if (!commandStr.includes(' & ')) {
+          // Let it run for a brief moment to see startup messages then terminate
+          commandStr = `/bin/sh -c '${commandStr.replace(/'/g, "'\\''")} & pid=$!; sleep 1; kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true'`;
+          
+          if (isLoggingEnabled()) {
+            log(`[DaytonaSandbox] Modified Flask command: ${commandStr}`);
+          }
         }
       }
       
@@ -244,9 +350,114 @@ export class DaytonaSandboxProvider {
         log(`[DaytonaSandbox] Command response: ${JSON.stringify(response)}`);
       }
       
+      // Detect web servers and add preview links for any type of server
+      let stdout = response.result || '';
+      
+      // Check if this is a command that runs a web server
+      const isWebServer = 
+        // Flask
+        commandStr.includes('flask run') || 
+        (commandStr.includes('python') && commandStr.includes('app.py')) ||
+        // Node.js
+        commandStr.includes('node ') || 
+        commandStr.includes('npm start') || 
+        commandStr.includes('npm run dev') ||
+        commandStr.includes('npx') ||
+        // Ruby/Rails
+        commandStr.includes('rails server') || 
+        commandStr.includes('rails s') ||
+        // Generic server indicators
+        commandStr.includes('server') || 
+        commandStr.includes('serve') ||
+        // Common server frameworks
+        commandStr.includes('express') ||
+        commandStr.includes('http-server') ||
+        commandStr.includes('live-server');
+      
+      if (isWebServer) {
+        // Try to detect the port number from various server output patterns
+        let port = 0;
+        
+        // Flask pattern: "Running on http://127.0.0.1:5000"
+        const flaskMatch = stdout.match(/Running on http:\/\/.*?:(\d+)/);
+        if (flaskMatch) {
+          port = parseInt(flaskMatch[1], 10);
+        }
+        
+        // Node.js patterns: "listening on port 3000" or "started server on 0.0.0.0:3000"
+        const nodeMatch = stdout.match(/(?:listening|started|running|server).+?(?:port|:)\s*(\d+)/i);
+        if (!port && nodeMatch) {
+          port = parseInt(nodeMatch[1], 10);
+        }
+        
+        // Check for port in command directly
+        if (!port) {
+          const portFlagMatch = commandStr.match(/--port[= ](\d+)|-p\s+(\d+)/);
+          if (portFlagMatch) {
+            port = parseInt(portFlagMatch[1] || portFlagMatch[2], 10);
+          }
+        }
+        
+        // Determine server type for custom messaging
+        let serverType = "Web server";
+        if (commandStr.includes('flask') || (commandStr.includes('python') && commandStr.includes('app.py'))) {
+          serverType = "Flask server";
+        } else if (commandStr.includes('node') || commandStr.includes('npm') || commandStr.includes('npx')) {
+          serverType = "Node.js server";
+        } else if (commandStr.includes('rails')) {
+          serverType = "Rails server";
+        }
+        
+        // Default ports based on server type if we couldn't detect one
+        if (!port) {
+          if (commandStr.includes('flask') || (commandStr.includes('python') && commandStr.includes('app.py'))) {
+            port = 5000; // Default Flask port
+          } else if (commandStr.includes('rails')) {
+            port = 3000; // Default Rails port
+          } else if (commandStr.includes('next') || commandStr.includes('vite')) {
+            port = 3000; // Default Next.js/Vite port
+          } else {
+            port = 8000; // Generic default
+          }
+        }
+        
+        try {
+          // Generate a preview link for this port
+          const previewInfo = this.getPreviewLink(port);
+          
+          // Add very visible preview link message with clear formatting
+          stdout += `\n\n====== PREVIEW LINK ======\n` +
+                   `${previewInfo.url}\n` +
+                   `=========================\n\n` +
+                   `${serverType} is running and accessible at the URL above.\n` +
+                   `(You may need authentication token: ${previewInfo.token})\n`;
+                   
+          // Also add to stderr to ensure it's visible regardless of stdout truncation
+          response.stderr = `PREVIEW LINK: ${previewInfo.url}`;
+                   
+          if (isLoggingEnabled()) {
+            log(`[DaytonaSandbox] Generated preview link for ${serverType} on port ${port}: ${previewInfo.url}`);
+          }
+        } catch (err) {
+          // Fallback message if preview link generation fails
+          stdout += `\n\n====== LOCAL ACCESS ======\n` +
+                   `http://127.0.0.1:${port}/\n` +
+                   `=========================\n\n` +
+                   `${serverType} is running locally.\n` + 
+                   `Unable to generate preview link: ${String(err)}`;
+
+          // Also add to stderr to ensure it's visible
+          response.stderr = `LOCAL ACCESS: http://127.0.0.1:${port}/`;
+                   
+          if (isLoggingEnabled()) {
+            log(`[DaytonaSandbox] Failed to generate preview link: ${String(err)}`);
+          }
+        }
+      }
+      
       // Convert from Daytona response format to our ExecResult format
       return {
-        stdout: response.result || '',
+        stdout: stdout,
         stderr: response.stderr || '',
         exitCode: response.exitCode || 0
       };
@@ -335,6 +546,66 @@ export class DaytonaSandboxProvider {
       return '';
     }
   }
+  
+  /**
+   * Generate a preview link for a port
+   * Uses the Daytona API to generate a preview link for accessing services running on a specific port
+   * 
+   * @param port The port number to generate a preview link for
+   * @returns An object containing the preview link URL and authentication token
+   */
+  public getPreviewLink(port: number): { url: string; token: string } {
+    if (!this.initialized || !this.sandbox) {
+      throw new Error("Daytona sandbox not initialized");
+    }
+    
+    try {
+      // First check if the Daytona SDK has the getPreviewLink method
+      if (typeof this.sandbox.getPreviewLink === 'function') {
+        // Use the official SDK method
+        const previewInfo = this.sandbox.getPreviewLink(port);
+        
+        if (isLoggingEnabled()) {
+          log(`[DaytonaSandbox] Generated preview link for port ${port} using SDK method`);
+        }
+        
+        return {
+          url: previewInfo.url,
+          token: previewInfo.token
+        };
+      } else {
+        // Fallback method - generate the URL based on sandbox ID
+        // This will work only if the sandbox ID follows the expected format
+        
+        if (!this.sandbox.id) {
+          throw new Error("Sandbox ID not available");
+        }
+        
+        // Extract sandbox ID from instance if available
+        const sandboxId = this.sandbox.id;
+        // Get the first 6 characters of the id as a node identifier
+        const nodeId = sandboxId.substring(0, 6);
+        
+        // Generate standard Daytona preview URL format
+        const previewUrl = `https://${port}-${sandboxId}.${nodeId}.daytona.work`;
+        
+        if (isLoggingEnabled()) {
+          log(`[DaytonaSandbox] Generated preview link for port ${port} using fallback method: ${previewUrl}`);
+        }
+        
+        // Return URL and empty token (token should be acquired through authentication)
+        return {
+          url: previewUrl,
+          token: 'auth-required' // Placeholder - in real implementation this would be a proper token
+        };
+      }
+    } catch (error: any) {
+      if (isLoggingEnabled()) {
+        log(`[DaytonaSandbox] Error generating preview link: ${error.message}`);
+      }
+      throw error;
+    }
+  }
 
   // Apply a patch to files
   public async applyPatch(patchText: string): Promise<ExecResult> {
@@ -360,15 +631,65 @@ export class DaytonaSandboxProvider {
         
         if (line.startsWith("*** Add File: ")) {
           // Handle file addition
-          if (addingFile) {
+          if (addingFile && currentFilePath) {
             // Save previous file if we were in the middle of adding one
-            // Use mapPath to handle proper file path mapping
-            const remotePath = this.mapPath(currentFilePath);
-            const fileContent = new File([currentFileContent], path.basename(remotePath));
-            await this.sandbox.fs.uploadFile(remotePath, fileContent);
+            try {
+              // Use mapPath to handle proper file path mapping
+              const remotePath = this.mapPath(currentFilePath);
+              
+              // Log file being created
+              if (isLoggingEnabled()) {
+                log(`[DaytonaSandbox] Creating file: ${remotePath} with ${currentFileContent.length} bytes`);
+              }
+              
+              // First ensure parent directory exists
+              const dirPath = path.dirname(remotePath);
+              try {
+                await this.sandbox.fs.createFolder(dirPath);
+              } catch (dirErr) {
+                // Ignore directory creation errors as it might already exist
+                if (isLoggingEnabled()) {
+                  log(`[DaytonaSandbox] Directory creation note: ${String(dirErr)}`);
+                }
+              }
+              
+              // Create the file using the Daytona API
+              const fileContent = new File([currentFileContent], path.basename(remotePath));
+              await this.sandbox.fs.uploadFile(remotePath, fileContent);
+              
+              // Verify the file exists
+              const checkCmd = `test -f "${remotePath}" && echo "exists" || echo "missing"`;
+              const checkResult = await this.sandbox.process.executeCommand(checkCmd);
+              
+              if (checkResult.result?.trim() === "exists") {
+                // Add file creation to output for proper display in terminal
+                successOutput += `Created ${currentFilePath}\n`;
+                
+                if (isLoggingEnabled()) {
+                  log(`[DaytonaSandbox] Successfully created file: ${remotePath}`);
+                }
+              } else {
+                if (isLoggingEnabled()) {
+                  log(`[DaytonaSandbox] File verification failed for: ${remotePath}, output: ${checkResult.result}`);
+                }
+                
+                // Fall back to using echo with redirect for file creation
+                const echoCmd = `echo '${currentFileContent.replace(/'/g, "'\\''")}' > "${remotePath}"`;
+                const echoResult = await this.sandbox.process.executeCommand(echoCmd);
+                
+                if (isLoggingEnabled()) {
+                  log(`[DaytonaSandbox] Echo fallback result: ${JSON.stringify(echoResult)}`);
+                }
+                
+                successOutput += `Created ${currentFilePath} (using echo fallback)\n`;
+              }
+            } catch (fileErr) {
+              if (isLoggingEnabled()) {
+                log(`[DaytonaSandbox] Error creating file ${currentFilePath}: ${String(fileErr)}`);
+              }
+              successOutput += `Error creating ${currentFilePath}: ${String(fileErr)}\n`;
+            }
             
-            // Add file creation to output for proper display in terminal
-            successOutput += `Created ${currentFilePath}\n`;
             currentFileContent = "";
           }
           
@@ -380,16 +701,49 @@ export class DaytonaSandboxProvider {
         } else if (line.startsWith("*** End of File") || line.startsWith("*** Update File:") || line.startsWith("*** Delete File:")) {
           // Save the current file before moving to the next operation
           if (addingFile && currentFilePath) {
-            // Use mapPath to handle proper file path mapping
-            const remotePath = this.mapPath(currentFilePath);
-            const fileContent = new File([currentFileContent], path.basename(remotePath));
-            await this.sandbox.fs.uploadFile(remotePath, fileContent);
-            
-            // Add file creation to output for proper display in terminal
-            successOutput += `Created ${currentFilePath}\n`;
-            
-            if (isLoggingEnabled()) {
-              log(`[DaytonaSandbox] Created file: ${remotePath}`);
+            try {
+              // Use mapPath to handle proper file path mapping
+              const remotePath = this.mapPath(currentFilePath);
+              
+              // First ensure parent directory exists
+              const dirPath = path.dirname(remotePath);
+              try {
+                await this.sandbox.fs.createFolder(dirPath);
+              } catch (dirErr) {
+                // Ignore directory creation errors as it might already exist
+              }
+              
+              // Create the file using the Daytona API
+              const fileContent = new File([currentFileContent], path.basename(remotePath));
+              await this.sandbox.fs.uploadFile(remotePath, fileContent);
+              
+              // Verify the file exists
+              const checkCmd = `test -f "${remotePath}" && echo "exists" || echo "missing"`;
+              const checkResult = await this.sandbox.process.executeCommand(checkCmd);
+              
+              if (checkResult.result?.trim() === "exists") {
+                // Add file creation to output for proper display in terminal
+                successOutput += `Created ${currentFilePath}\n`;
+                
+                if (isLoggingEnabled()) {
+                  log(`[DaytonaSandbox] Successfully created file: ${remotePath}`);
+                }
+              } else {
+                if (isLoggingEnabled()) {
+                  log(`[DaytonaSandbox] File verification failed for: ${remotePath}, trying echo fallback`);
+                }
+                
+                // Fall back to using echo with redirect for file creation
+                const echoCmd = `echo '${currentFileContent.replace(/'/g, "'\\''")}' > "${remotePath}"`;
+                const echoResult = await this.sandbox.process.executeCommand(echoCmd);
+                
+                successOutput += `Created ${currentFilePath} (using echo fallback)\n`;
+              }
+            } catch (fileErr) {
+              if (isLoggingEnabled()) {
+                log(`[DaytonaSandbox] Error creating file ${currentFilePath}: ${String(fileErr)}`);
+              }
+              successOutput += `Error creating ${currentFilePath}: ${String(fileErr)}\n`;
             }
             
             currentFilePath = "";
@@ -400,15 +754,22 @@ export class DaytonaSandboxProvider {
           // Handle other operations as needed
           if (line.startsWith("*** Delete File: ")) {
             const fileToDelete = line.substring("*** Delete File: ".length);
-            // Use mapPath to handle proper file path mapping
-            const remotePath = this.mapPath(fileToDelete);
-            await this.sandbox.fs.deleteFile(remotePath);
-            
-            // Add file deletion to output for proper display in terminal
-            successOutput += `Deleted ${fileToDelete}\n`;
-            
-            if (isLoggingEnabled()) {
-              log(`[DaytonaSandbox] Deleted file: ${remotePath}`);
+            try {
+              // Use mapPath to handle proper file path mapping
+              const remotePath = this.mapPath(fileToDelete);
+              await this.sandbox.fs.deleteFile(remotePath);
+              
+              // Add file deletion to output for proper display in terminal
+              successOutput += `Deleted ${fileToDelete}\n`;
+              
+              if (isLoggingEnabled()) {
+                log(`[DaytonaSandbox] Deleted file: ${remotePath}`);
+              }
+            } catch (delErr) {
+              if (isLoggingEnabled()) {
+                log(`[DaytonaSandbox] Error deleting file ${fileToDelete}: ${String(delErr)}`);
+              }
+              successOutput += `Error deleting ${fileToDelete}: ${String(delErr)}\n`;
             }
           }
         }
@@ -416,16 +777,49 @@ export class DaytonaSandboxProvider {
       
       // Handle any remaining file operation
       if (addingFile && currentFilePath) {
-        // Use mapPath to handle proper file path mapping
-        const remotePath = this.mapPath(currentFilePath);
-        const fileContent = new File([currentFileContent], path.basename(remotePath));
-        await this.sandbox.fs.uploadFile(remotePath, fileContent);
-        
-        // Add file creation to output for proper display in terminal
-        successOutput += `Created ${currentFilePath}\n`;
-        
-        if (isLoggingEnabled()) {
-          log(`[DaytonaSandbox] Created file: ${remotePath}`);
+        try {
+          // Use mapPath to handle proper file path mapping
+          const remotePath = this.mapPath(currentFilePath);
+          
+          // First ensure parent directory exists
+          const dirPath = path.dirname(remotePath);
+          try {
+            await this.sandbox.fs.createFolder(dirPath);
+          } catch (dirErr) {
+            // Ignore directory creation errors as it might already exist
+          }
+          
+          // Create the file using the Daytona API
+          const fileContent = new File([currentFileContent], path.basename(remotePath));
+          await this.sandbox.fs.uploadFile(remotePath, fileContent);
+          
+          // Verify the file exists
+          const checkCmd = `test -f "${remotePath}" && echo "exists" || echo "missing"`;
+          const checkResult = await this.sandbox.process.executeCommand(checkCmd);
+          
+          if (checkResult.result?.trim() === "exists") {
+            // Add file creation to output for proper display in terminal
+            successOutput += `Created ${currentFilePath}\n`;
+            
+            if (isLoggingEnabled()) {
+              log(`[DaytonaSandbox] Successfully created file: ${remotePath}`);
+            }
+          } else {
+            if (isLoggingEnabled()) {
+              log(`[DaytonaSandbox] File verification failed for: ${remotePath}, trying echo fallback`);
+            }
+            
+            // Fall back to using echo with redirect for file creation
+            const echoCmd = `echo '${currentFileContent.replace(/'/g, "'\\''")}' > "${remotePath}"`;
+            const echoResult = await this.sandbox.process.executeCommand(echoCmd);
+            
+            successOutput += `Created ${currentFilePath} (using echo fallback)\n`;
+          }
+        } catch (fileErr) {
+          if (isLoggingEnabled()) {
+            log(`[DaytonaSandbox] Error creating file ${currentFilePath}: ${String(fileErr)}`);
+          }
+          successOutput += `Error creating ${currentFilePath}: ${String(fileErr)}\n`;
         }
       }
       

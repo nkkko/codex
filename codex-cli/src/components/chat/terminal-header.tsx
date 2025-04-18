@@ -3,6 +3,7 @@ import type { AgentLoop } from "../../utils/agent/agent-loop.js";
 import { Box, Text } from "ink";
 import path from "node:path";
 import React from "react";
+import { getSandboxType } from "../../utils/session.js";
 
 export interface TerminalHeaderProps {
   terminalRows: number;
@@ -31,7 +32,8 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
         // Compact header for small terminal windows
         <Text>
           ● Codex v{version} – {PWD} – {model} –{" "}
-          <Text color={colorsByPolicy[approvalPolicy]}>{approvalPolicy}</Text>
+          <Text color={colorsByPolicy[approvalPolicy]}>{approvalPolicy}</Text> – 
+          sandbox: <Text color="greenBright">{getSandboxType()}</Text>
         </Text>
       ) : (
         <>
@@ -66,6 +68,12 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
               <Text color="blueBright">↳</Text> approval:{" "}
               <Text bold color={colorsByPolicy[approvalPolicy]} dimColor>
                 {approvalPolicy}
+              </Text>
+            </Text>
+            <Text dimColor>
+              <Text color="blueBright">↳</Text> sandbox:{" "}
+              <Text bold color="greenBright">
+                {getSandboxType()}
               </Text>
             </Text>
             {initialImagePaths?.map((img, idx) => (
