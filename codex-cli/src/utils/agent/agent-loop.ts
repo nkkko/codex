@@ -21,6 +21,7 @@ import {
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
+import { logApiCall } from "../storage/save-rollout.js";
 import {
   ORIGIN,
   CLI_VERSION,
@@ -699,6 +700,7 @@ export class AgentLoop {
               `instructions (length ${mergedInstructions.length}): ${mergedInstructions}`,
             );
 
+            const apiCallStartTime = Date.now();
             // eslint-disable-next-line no-await-in-loop
             stream = await responseCall({
               model: this.model,
@@ -721,6 +723,19 @@ export class AgentLoop {
               // plain text instead (resulting in a missing tool‑call).
               tool_choice: "auto",
             });
+            
+            // Log API call after it completes
+            const apiCallDuration = Date.now() - apiCallStartTime;
+            // We'll get token counts from the response later, but create initial log entry
+            logApiCall(
+              this.sessionId,
+              this.provider === "openai" ? "responses.create" : "chat.completions",
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              apiCallDuration
+            ).catch(err => log(`Failed to log API call: ${err}`));
             break;
           } catch (error) {
             const isTimeout = error instanceof APIConnectionTimeoutError;
@@ -950,6 +965,21 @@ export class AgentLoop {
                     stageItem(item as ResponseItem);
                   }
                 }
+                
+                // Log token usage from completed response
+                if (event.response.usage) {
+                  const usage = event.response.usage;
+                  logApiCall(
+                    this.sessionId,
+                    this.provider === "openai" ? "responses.create" : "chat.completions",
+                    event.response.id,
+                    usage.input_tokens ?? usage.prompt_tokens,
+                    usage.output_tokens ?? usage.completion_tokens,
+                    usage.total_tokens,
+                    undefined // Duration was already logged when call was made
+                  ).catch(err => log(`Failed to log API call tokens: ${err}`));
+                }
+                
                 if (
                   event.response.status === "completed" ||
                   (event.response.status as unknown as string) ===

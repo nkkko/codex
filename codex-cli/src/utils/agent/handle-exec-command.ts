@@ -10,6 +10,8 @@ import { CODEX_UNSAFE_ALLOW_NO_SANDBOX, type AppConfig } from "../config.js";
 import { exec, execApplyPatch } from "./exec.js";
 import { ReviewDecision } from "./review.js";
 import { isLoggingEnabled, log } from "../logger/log.js";
+import { logToolCall } from "../storage/save-rollout.js";
+import { getSessionId } from "../session.js";
 import { SandboxType } from "./sandbox/interface.js";
 import { PATH_TO_SEATBELT_EXECUTABLE } from "./sandbox/macos-seatbelt.js";
 import fs from "fs/promises";
@@ -261,6 +263,28 @@ async function execCommand(
     log(
       `EXEC exit=${exitCode} time=${duration}ms:\n\tSTDOUT: ${stdout}\n\tSTDERR: ${stderr}`,
     );
+  }
+  
+  // Log the tool call for conversation archiving
+  try {
+    // Extract session ID from the current module scope
+    const sessionId = getSessionId();
+    if (sessionId) {
+      logToolCall(
+        sessionId,
+        applyPatchCommand ? "apply_patch" : "shell",
+        {
+          command: execInput.cmd, 
+          workdir: workdir || process.cwd(),
+          timeout: execInput.timeoutInMillis
+        },
+        stdout || stderr,
+        exitCode,
+        duration
+      ).catch(err => log(`Failed to log tool call: ${err}`));
+    }
+  } catch (err) {
+    log(`Error logging tool call: ${err}`);
   }
 
   return {

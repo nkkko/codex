@@ -304,6 +304,9 @@ export default function TerminalChatInput({
                 case "/clearhistory":
                   onSubmit(cmd);
                   break;
+                case "/report":
+                  onSubmit(cmd);
+                  break;
                 default:
                   break;
               }
@@ -577,6 +580,182 @@ export default function TerminalChatInput({
           },
         );
 
+        return;
+      } else if (inputValue === "/report") {
+        // Generate a report of the current conversation
+        setInput("");
+        
+        try {
+          const { getSessionId } = await import("../../utils/session.js");
+          const { loadConfig } = await import("../../utils/config.js");
+          const { logConversation } = await import(
+            "../../utils/storage/save-rollout.js"
+          );
+          const fs = await import("fs/promises");
+          const path = await import("path");
+          const os = await import("os");
+          
+          const LOGS_ROOT = path.join(os.homedir(), ".codex", "logs");
+          
+          // Get the current session ID
+          const sessionId = getSessionId();
+          if (!sessionId) {
+            setItems((prev) => [
+              ...prev,
+              {
+                id: `report-error-${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [
+                  {
+                    type: "input_text",
+                    text: `⚠️ No active session found. Start a conversation first.`,
+                  },
+                ],
+              },
+            ]);
+            return;
+          }
+          
+          // Look for conversation logs for this session
+          await fs.mkdir(LOGS_ROOT, { recursive: true });
+          const files = await fs.readdir(LOGS_ROOT);
+          const sessionFiles = files.filter(file => 
+            file.includes(sessionId) && file.startsWith('conversation-')
+          );
+          
+          if (sessionFiles.length === 0) {
+            // Generate a new report from the current terminal state
+            const conversationLog = {
+              session: {
+                timestamp: new Date().toISOString(),
+                id: sessionId,
+                instructions: loadConfig().instructions || "",
+                model: loadConfig().model,
+              },
+              items: items || [],
+            };
+            
+            // Save the log
+            const logPath = await logConversation(conversationLog);
+            
+            setItems((prev) => [
+              ...prev,
+              {
+                id: `report-${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [
+                  {
+                    type: "input_text",
+                    text: `✓ Generated new conversation report at ${logPath}`,
+                  },
+                ],
+              },
+            ]);
+            return;
+          }
+          
+          // If we found logs, show the most recent one
+          const mostRecent = sessionFiles.sort().pop()!;
+          const filePath = path.join(LOGS_ROOT, mostRecent);
+          
+          // Read and display summary
+          const fileContent = await fs.readFile(filePath, 'utf8');
+          const log = JSON.parse(fileContent) as {
+            session: {
+              timestamp: string;
+              id: string;
+              instructions: string;
+              model?: string;
+            };
+            items: Array<ResponseItem>;
+            toolCalls?: Array<{
+              timestamp: string;
+              toolName: string;
+              args: Record<string, unknown>;
+              result: string;
+              exitCode?: number;
+              durationMs?: number;
+            }>;
+            apiCalls?: Array<{
+              timestamp: string;
+              endpoint: string;
+              requestId?: string;
+              inputTokens?: number;
+              outputTokens?: number;
+              totalTokens?: number;
+              durationMs?: number;
+            }>;
+          };
+          
+          // Create summary
+          const toolCallCount = log.toolCalls?.length || 0;
+          const apiCallCount = log.apiCalls?.length || 0;
+          const messageCount = log.items.length;
+          const startTime = new Date(log.session.timestamp);
+          
+          // Count token usage if available
+          let totalTokens = 0;
+          let totalInputTokens = 0;
+          let totalOutputTokens = 0;
+          
+          if (log.apiCalls) {
+            for (const call of log.apiCalls) {
+              if (call.totalTokens) totalTokens += call.totalTokens;
+              if (call.inputTokens) totalInputTokens += call.inputTokens;
+              if (call.outputTokens) totalOutputTokens += call.outputTokens;
+            }
+          }
+          
+          let summary = `📊 Conversation Report: ${mostRecent}\n\n`;
+          summary += `Session ID: ${log.session.id}\n`;
+          summary += `Started: ${startTime.toLocaleString()}\n`;
+          summary += `Messages: ${messageCount}\n`;
+          summary += `Tool Calls: ${toolCallCount}\n`;
+          summary += `API Calls: ${apiCallCount}\n`;
+          
+          if (totalTokens > 0) {
+            summary += `\nToken Usage:\n`;
+            summary += `- Input: ${totalInputTokens.toLocaleString()}\n`;
+            summary += `- Output: ${totalOutputTokens.toLocaleString()}\n`;
+            summary += `- Total: ${totalTokens.toLocaleString()}\n`;
+          }
+          
+          summary += `\nLog file: ${filePath}`;
+          
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `report-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: summary,
+                },
+              ],
+            },
+          ]);
+        } catch (error) {
+          // If anything went wrong, notify the user.
+          setItems((prev) => [
+            ...prev,
+            {
+              id: `report-error-${Date.now()}`,
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: `⚠️ Failed to generate conversation report: ${error}`,
+                },
+              ],
+            },
+          ]);
+        }
+        
         return;
       } else if (inputValue === "/bug") {
         // Generate a GitHub bug report URL pre‑filled with session details.
