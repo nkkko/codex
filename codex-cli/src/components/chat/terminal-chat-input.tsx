@@ -692,8 +692,12 @@ export default function TerminalChatInput({
           // Create summary
           const toolCallCount = log.toolCalls?.length || 0;
           const apiCallCount = log.apiCalls?.length || 0;
+          const fileOpCount = log.fileOperations?.length || 0;
+          const errorCount = log.errors?.length || 0;
           const messageCount = log.items.length;
           const startTime = new Date(log.session.timestamp);
+          const endTime = log.session.endedAt ? new Date(log.session.endedAt) : null;
+          const sessionStatus = log.session.status || "active";
           
           // Count token usage if available
           let totalTokens = 0;
@@ -707,19 +711,55 @@ export default function TerminalChatInput({
               if (call.outputTokens) totalOutputTokens += call.outputTokens;
             }
           }
+
+          // Calculate session duration
+          let durationText = "In progress";
+          if (endTime && startTime) {
+            const durationMs = endTime.getTime() - startTime.getTime();
+            const durationMinutes = Math.floor(durationMs / 60000);
+            const durationSeconds = Math.floor((durationMs % 60000) / 1000);
+            durationText = `${durationMinutes}m ${durationSeconds}s`;
+          }
+          
+          // Count file operations by type if available
+          const fileOpTypes: Record<string, number> = {};
+          if (log.fileOperations) {
+            for (const op of log.fileOperations) {
+              const type = op.type;
+              fileOpTypes[type] = (fileOpTypes[type] || 0) + 1;
+            }
+          }
           
           let summary = `📊 Conversation Report: ${mostRecent}\n\n`;
           summary += `Session ID: ${log.session.id}\n`;
+          summary += `Status: ${sessionStatus}\n`;
           summary += `Started: ${startTime.toLocaleString()}\n`;
+          if (endTime) {
+            summary += `Ended: ${endTime.toLocaleString()}\n`;
+          }
+          summary += `Duration: ${durationText}\n`;
           summary += `Messages: ${messageCount}\n`;
           summary += `Tool Calls: ${toolCallCount}\n`;
           summary += `API Calls: ${apiCallCount}\n`;
+          summary += `File Operations: ${fileOpCount}\n`;
+          
+          if (errorCount > 0) {
+            summary += `Errors: ${errorCount}\n`;
+          }
           
           if (totalTokens > 0) {
             summary += `\nToken Usage:\n`;
             summary += `- Input: ${totalInputTokens.toLocaleString()}\n`;
             summary += `- Output: ${totalOutputTokens.toLocaleString()}\n`;
             summary += `- Total: ${totalTokens.toLocaleString()}\n`;
+          }
+          
+          // Include file operation breakdown if available
+          if (Object.keys(fileOpTypes).length > 0) {
+            summary += `\nFile Operations:\n`;
+            for (const [type, count] of Object.entries(fileOpTypes)) {
+              summary += `- ${type}: ${count}\n`;
+            }
           }
           
           summary += `\nLog file: ${filePath}`;

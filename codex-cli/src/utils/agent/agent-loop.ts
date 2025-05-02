@@ -21,7 +21,12 @@ import {
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
-import { logApiCall } from "../storage/save-rollout.js";
+import { 
+  logApiCall, 
+  logSessionStart, 
+  logSessionEnd, 
+  logError 
+} from "../storage/save-rollout.js";
 import {
   ORIGIN,
   CLI_VERSION,
@@ -239,6 +244,14 @@ export class AgentLoop {
     }
     this.terminated = true;
 
+    // Log session end with "completed" status
+    try {
+      logSessionEnd(this.sessionId, "completed")
+        .catch(err => log(`Failed to log session end: ${err}`));
+    } catch (err) {
+      log(`Error logging session end: ${err}`);
+    }
+
     this.hardAbort.abort();
 
     this.cancel();
@@ -320,6 +333,18 @@ export class AgentLoop {
 
     setSessionId(this.sessionId);
     setCurrentModel(this.model);
+
+    // Log session start
+    try {
+      logSessionStart(
+        this.sessionId, 
+        this.model, 
+        this.instructions || "", 
+        config?.user
+      ).catch(err => log(`Failed to log session start: ${err}`));
+    } catch (err) {
+      log(`Error logging session start: ${err}`);
+    }
 
     this.hardAbort = new AbortController();
 
@@ -772,6 +797,15 @@ export class AgentLoop {
               errCtx.type === "invalid_request_error";
 
             if (isTooManyTokensError) {
+              // Log the error to conversation archive
+              logError(this.sessionId, "Too many tokens error", {
+                code: "max_tokens_exceeded",
+                context: {
+                  model: this.model,
+                  error: errCtx
+                }
+              }).catch(err => log(`Failed to log error: ${err}`));
+
               this.onItem({
                 id: `error-${Date.now()}`,
                 type: "message",
@@ -826,6 +860,19 @@ export class AgentLoop {
                   `Type: ${errCtx.type || "unknown"}`,
                   `Message: ${errCtx.message || "unknown"}`,
                 ].join(", ");
+
+                // Log the error to conversation archive
+                logError(this.sessionId, "Rate limit exceeded", {
+                  code: "rate_limit_exceeded",
+                  context: {
+                    model: this.model,
+                    retryAttempts: MAX_RETRIES,
+                    status: status,
+                    errorCode: errCtx.code,
+                    errorType: errCtx.type,
+                    errorMessage: errCtx.message
+                  }
+                }).catch(err => log(`Failed to log error: ${err}`));
 
                 this.onItem({
                   id: `error-${Date.now()}`,
@@ -1279,6 +1326,12 @@ export class AgentLoop {
 
       if (isPrematureClose) {
         try {
+          // Log the error to conversation archive
+          logError(this.sessionId, "Connection closed prematurely", {
+            code: "ERR_STREAM_PREMATURE_CLOSE",
+            stack: err instanceof Error ? err.stack : undefined
+          }).catch(e => log(`Failed to log error: ${e}`));
+
           this.onItem({
             id: `error-${Date.now()}`,
             type: "message",
@@ -1370,6 +1423,16 @@ export class AgentLoop {
 
       if (isNetworkOrServerError) {
         try {
+          // Log the error to conversation archive
+          logError(this.sessionId, "Network error", {
+            code: err instanceof Error ? (err as any).code : "unknown",
+            stack: err instanceof Error ? err.stack : undefined,
+            context: {
+              model: this.model,
+              status: err instanceof Error ? (err as any).status : undefined
+            }
+          }).catch(e => log(`Failed to log error: ${e}`));
+          
           const msgText =
             "⚠️  Network error while contacting OpenAI. Please check your connection and try again.";
           this.onItem({
