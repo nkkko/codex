@@ -63,6 +63,7 @@ export const OPENAI_TIMEOUT_MS =
   parseInt(process.env["OPENAI_TIMEOUT_MS"] || "0", 10) || undefined;
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
+export let DAYTONA_API_KEY = process.env["DAYTONA_API_KEY"] || "";
 
 export const DEFAULT_REASONING_EFFORT = "high";
 export const OPENAI_ORGANIZATION = process.env["OPENAI_ORGANIZATION"] || "";
@@ -148,6 +149,12 @@ export type StoredConfig = {
   /** User-defined safe commands */
   safeCommands?: Array<string>;
   reasoningEffort?: ReasoningEffort;
+  /** Sandbox type to use for command execution */
+  sandboxType?: string;
+  /** Daytona cloud sandbox configuration */
+  daytonaConfig?: {
+    autoStopInterval?: number;
+  };
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -185,6 +192,14 @@ export type AppConfig = {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
+  };
+  
+  /** Sandbox type to use for command execution */
+  sandboxType?: string;
+  
+  /** Daytona cloud sandbox configuration */
+  daytonaConfig?: {
+    autoStopInterval: number;
   };
 };
 
@@ -506,6 +521,8 @@ export const saveConfig = (
     approvalMode: config.approvalMode,
     disableResponseStorage: config.disableResponseStorage,
     reasoningEffort: config.reasoningEffort,
+    sandboxType: config.sandboxType,
+    daytonaConfig: config.daytonaConfig,
   };
 
   // Add history settings if they exist
