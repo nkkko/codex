@@ -969,12 +969,15 @@ export class AgentLoop {
                 // Log token usage from completed response
                 if (event.response.usage) {
                   const usage = event.response.usage;
+                  // Use type assertions to handle different API response formats
+                  const inputTokens = (usage as any).input_tokens ?? (usage as any).prompt_tokens;
+                  const outputTokens = (usage as any).output_tokens ?? (usage as any).completion_tokens;
                   logApiCall(
                     this.sessionId,
                     this.provider === "openai" ? "responses.create" : "chat.completions",
                     event.response.id,
-                    usage.input_tokens ?? usage.prompt_tokens,
-                    usage.output_tokens ?? usage.completion_tokens,
+                    inputTokens,
+                    outputTokens,
                     usage.total_tokens,
                     undefined // Duration was already logged when call was made
                   ).catch(err => log(`Failed to log API call tokens: ${err}`));
