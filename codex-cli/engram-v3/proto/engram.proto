@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package engram.v3;
+
+option go_package = "github.com/nkkko/engram-v3/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+
+// WorkUnitType defines the type of a work unit
+enum WorkUnitType {
+  UNKNOWN = 0;
+  MESSAGE = 1;           // Conversation messages
+  REASONING = 2;         // Agent reasoning steps
+  TOOL_CALL = 3;         // Tool invocation
+  TOOL_RESULT = 4;       // Tool output
+  FILE_CHANGE = 5;       // Code/document change
+  TASK_STATUS = 6;       // Task status update
+  ERROR = 7;             // Error information
+  SYSTEM = 8;            // System notifications
+}
+
+// RelationshipType defines how work units relate to each other
+enum RelationshipType {
+  UNSPECIFIED = 0;
+  SEQUENTIAL = 1;        // Chronological order
+  CAUSES = 2;            // Causal relationship
+  DEPENDS_ON = 3;        // Dependency
+  REFERENCES = 4;        // Reference or citation
+  RESPONDS_TO = 5;       // Response to another unit
+  MODIFIES = 6;          // Modifies another unit
+  REPLACES = 7;          // Replaces another unit
+}
+
+// Relationship represents a typed connection between work units
+message Relationship {
+  string target_id = 1;         // Target work unit ID
+  RelationshipType type = 2;    // Type of relationship
+  map<string, string> meta = 3; // Optional metadata
+}
+
+// WorkUnit is an immutable atomic record of information
+message WorkUnit {
+  string id = 1;                           // UUIDv7
+  string context_id = 2;                   // Context this unit belongs to
+  string agent_id = 3;                     // Agent that created this unit
+  WorkUnitType type = 4;                   // Type of work unit
+  google.protobuf.Timestamp ts = 5;        // Creation timestamp
+  map<string, string> meta = 6;            // Arbitrary metadata
+  bytes payload = 7;                       // UTF-8 or binary blob
+  repeated Relationship relationships = 8;  // Relationships to other units
+}
+
+// Context represents a logical grouping of work units and agents
+message Context {
+  string id = 1;                   // Context identifier
+  string display_name = 2;         // Human-readable name
+  repeated string agent_ids = 3;   // Participating agents
+  repeated string pinned_units = 4; // Always-load work units
+  map<string, string> meta = 5;    // Arbitrary metadata
+  google.protobuf.Timestamp created_at = 6; // Creation timestamp
+  google.protobuf.Timestamp updated_at = 7; // Last update timestamp
+}
+
+// LockHandle represents exclusive access rights to a resource
+message LockHandle {
+  string resource_path = 1;                // Resource being locked
+  string holder_agent = 2;                 // Agent holding the lock
+  google.protobuf.Timestamp expires_at = 3; // Lock expiration time
+  string lock_id = 4;                      // Unique lock identifier
+}
+
+// CreateWorkUnitRequest is used to create a new work unit
+message CreateWorkUnitRequest {
+  string context_id = 1;                   // Context ID
+  string agent_id = 2;                     // Creating agent ID
+  WorkUnitType type = 3;                   // Unit type
+  map<string, string> meta = 4;            // Metadata
+  bytes payload = 5;                       // Content payload
+  repeated Relationship relationships = 6;  // Relationships
+}
+
+// CreateWorkUnitResponse returns the created work unit
+message CreateWorkUnitResponse {
+  WorkUnit unit = 1;               // Created work unit
+}
+
+// GetWorkUnitRequest retrieves a specific work unit by ID
+message GetWorkUnitRequest {
+  string id = 1;                   // Unit ID to retrieve
+}
+
+// GetWorkUnitResponse returns the requested work unit
+message GetWorkUnitResponse {
+  WorkUnit unit = 1;               // Retrieved work unit
+}
+
+// ListWorkUnitsRequest retrieves multiple work units
+message ListWorkUnitsRequest {
+  string context_id = 1;           // Context to list from
+  int32 limit = 2;                 // Max units to return
+  string cursor = 3;               // Pagination cursor
+  bool reverse = 4;                // Reverse chronological order
+}
+
+// ListWorkUnitsResponse returns the matching work units
+message ListWorkUnitsResponse {
+  repeated WorkUnit units = 1;     // Retrieved work units
+  string next_cursor = 2;          // Next pagination cursor
+}
+
+// UpdateContextRequest modifies a context
+message UpdateContextRequest {
+  string id = 1;                   // Context ID to update
+  string display_name = 2;         // Optional new name
+  repeated string add_agents = 3;  // Agents to add
+  repeated string remove_agents = 4; // Agents to remove
+  repeated string pin_units = 5;   // Units to pin
+  repeated string unpin_units = 6; // Units to unpin
+  map<string, string> meta = 7;    // Metadata to update
+}
+
+// UpdateContextResponse returns the updated context
+message UpdateContextResponse {
+  Context context = 1;             // Updated context
+}
+
+// AcquireLockRequest requests a lock on a resource
+message AcquireLockRequest {
+  string resource_path = 1;        // Resource to lock
+  string agent_id = 2;             // Requesting agent
+  int32 ttl_seconds = 3;           // Lock duration
+}
+
+// AcquireLockResponse returns lock information
+message AcquireLockResponse {
+  LockHandle lock = 1;             // Acquired lock
+}
+
+// ReleaseLockRequest releases a previously acquired lock
+message ReleaseLockRequest {
+  string resource_path = 1;        // Resource to unlock
+  string agent_id = 2;             // Requesting agent
+  string lock_id = 3;              // Lock ID to release
+}
+
+// ReleaseLockResponse confirms the lock release
+message ReleaseLockResponse {
+  bool released = 1;               // Whether the lock was released
+}
+
+// SearchRequest searches for work units
+message SearchRequest {
+  string query = 1;                // Text query
+  string context_id = 2;           // Optional context filter
+  repeated string agent_ids = 3;   // Optional agent filter
+  repeated WorkUnitType types = 4; // Optional type filter
+  map<string, string> meta_filters = 5; // Optional metadata filters
+  int32 limit = 6;                 // Max results
+  int32 offset = 7;                // Result offset
+}
+
+// SearchResponse returns search results
+message SearchResponse {
+  repeated string unit_ids = 1;    // Matching unit IDs
+  int32 total_results = 2;         // Total match count
+}
+
+// EngramService defines the gRPC API surface
+service EngramService {
+  // Work Unit operations
+  rpc CreateWorkUnit(CreateWorkUnitRequest) returns (CreateWorkUnitResponse);
+  rpc GetWorkUnit(GetWorkUnitRequest) returns (GetWorkUnitResponse);
+  rpc ListWorkUnits(ListWorkUnitsRequest) returns (ListWorkUnitsResponse);
+  
+  // Context operations
+  rpc UpdateContext(UpdateContextRequest) returns (UpdateContextResponse);
+  
+  // Lock operations
+  rpc AcquireLock(AcquireLockRequest) returns (AcquireLockResponse);
+  rpc ReleaseLock(ReleaseLockRequest) returns (ReleaseLockResponse);
+  
+  // Search operations
+  rpc Search(SearchRequest) returns (SearchResponse);
+  
+  // Streaming is handled via WebSockets/SSE in the HTTP API
+}

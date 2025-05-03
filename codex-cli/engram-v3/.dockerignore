@@ -1,0 +1,44 @@
+# Git files
+.git
+.github
+.gitignore
+
+# Editor files
+.vscode
+.idea
+*.swp
+*.swo
+*.swn
+*~
+
+# Build artifacts
+bin/
+dist/
+vendor/
+*.db
+*.log
+data/
+
+# Docker files
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# Test files
+*_test.go
+tests/
+coverage.txt
+.coverage/
+
+# Temporary files
+.tmp/
+tmp/
+*.tmp
+*.bak
+
+# OS generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+ehthumbs_vista.db

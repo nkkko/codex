@@ -1,0 +1,109 @@
+# Example Engram configuration file
+
+# Server configuration
+server:
+  # HTTP server address
+  addr: ":8080"
+  # Maximum request body size in bytes (1MB)
+  max_body_size: 1048576
+  # Read timeout in seconds
+  read_timeout: 5
+  # Write timeout in seconds
+  write_timeout: 10
+  # Idle timeout in seconds
+  idle_timeout: 120
+
+# Storage configuration
+storage:
+  # Data directory
+  data_dir: "./data"
+  # WAL sync interval in milliseconds
+  wal_sync_interval_ms: 2
+  # WAL batch size (number of work units)
+  wal_batch_size: 64
+  # Maximum WAL file size before rotation (in MB)
+  max_wal_size_mb: 512
+  # RocksDB cache size (in MB)
+  rocksdb_cache_mb: 512
+  # Number of RocksDB background compaction threads
+  rocksdb_compaction_threads: 4
+
+# Router configuration
+router:
+  # Maximum buffer size for subscription channels
+  max_buffer_size: 100
+  # Cleanup interval in seconds
+  cleanup_interval: 30
+
+# Notifier configuration
+notifier:
+  # Maximum idle time before dropping a connection (in seconds)
+  max_idle_time: 30
+  # Heartbeat interval in seconds
+  heartbeat_interval: 5
+  # Maximum concurrent connections
+  max_connections: 10000
+
+# Lock manager configuration
+locks:
+  # Default lock TTL in seconds
+  default_ttl: 60
+  # Cleanup interval in seconds
+  cleanup_interval: 10
+  # Maximum number of locks per agent
+  max_locks_per_agent: 100
+
+# Search configuration
+search:
+  # Search engine type (sqlite, qdrant)
+  engine: "sqlite"
+  # Index update interval in milliseconds
+  update_interval_ms: 200
+  # Maximum batch size for index updates
+  max_batch_size: 100
+  # Number of search results to return by default
+  default_limit: 100
+  # Maximum number of search results to return
+  max_limit: 1000
+
+# Authentication configuration
+auth:
+  # Enable authentication
+  enabled: true
+  # JWT secret key
+  jwt_secret: "change-me-in-production"
+  # JWT expiration in minutes
+  jwt_expiration_minutes: 60
+  # Allow anonymous access
+  allow_anonymous: false
+
+# Logging configuration
+logging:
+  # Log level (debug, info, warn, error)
+  level: "info"
+  # Log format (json, console)
+  format: "json"
+  # Enable OpenTelemetry tracing
+  tracing: true
+  # OpenTelemetry collector endpoint
+  otel_endpoint: "localhost:4317"
+
+# Metrics configuration
+metrics:
+  # Enable Prometheus metrics
+  enabled: true
+  # Metrics endpoint
+  endpoint: "/metrics"
+  # Metrics collection interval in seconds
+  interval: 15
+
+# API Rate limiting
+rate_limit:
+  # Enable rate limiting
+  enabled: true
+  # Maximum requests per minute
+  rpm: 600
+  # Maximum requests per second
+  rps: 10
+  # Maximum WebSocket messages per second
+  ws_messages_per_second: 20
