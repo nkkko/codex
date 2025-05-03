@@ -21,12 +21,6 @@ import {
 import { log } from "../logger/log.js";
 import { parseToolCallArguments } from "../parsers.js";
 import { responsesCreateViaChatCompletions } from "../responses.js";
-import { 
-  logApiCall, 
-  logSessionStart, 
-  logSessionEnd, 
-  logError 
-} from "../storage/save-rollout.js";
 import {
   ORIGIN,
   CLI_VERSION,
@@ -35,6 +29,12 @@ import {
   setSessionId,
 } from "../session.js";
 import { handleExecCommand } from "./handle-exec-command.js";
+import { 
+  logApiCall, 
+  logSessionStart, 
+  logSessionEnd, 
+  logError 
+} from "../storage/save-rollout.js";
 import { randomUUID } from "node:crypto";
 import OpenAI, { APIConnectionTimeoutError } from "openai";
 
@@ -751,6 +751,13 @@ export class AgentLoop {
             
             // Log API call after it completes
             const apiCallDuration = Date.now() - apiCallStartTime;
+            
+            // Capture API request data for conversation logging
+            // Save the full instructions without truncation
+            const promptContent = typeof mergedInstructions === 'string' 
+              ? mergedInstructions
+              : undefined;
+            
             // We'll get token counts from the response later, but create initial log entry
             logApiCall(
               this.sessionId,
@@ -759,7 +766,8 @@ export class AgentLoop {
               undefined,
               undefined,
               undefined,
-              apiCallDuration
+              apiCallDuration,
+              promptContent
             ).catch(err => log(`Failed to log API call: ${err}`));
             break;
           } catch (error) {
@@ -1017,8 +1025,39 @@ export class AgentLoop {
                 if (event.response.usage) {
                   const usage = event.response.usage;
                   // Use type assertions to handle different API response formats
-                  const inputTokens = (usage as any).input_tokens ?? (usage as any).prompt_tokens;
-                  const outputTokens = (usage as any).output_tokens ?? (usage as any).completion_tokens;
+                  const inputTokens = (usage as {input_tokens?: number; prompt_tokens?: number}).input_tokens ?? 
+                                    (usage as {prompt_tokens?: number}).prompt_tokens;
+                  const outputTokens = (usage as {output_tokens?: number; completion_tokens?: number}).output_tokens ?? 
+                                     (usage as {completion_tokens?: number}).completion_tokens;
+                  
+                  // Get the assistant response content for logging
+                  let responseContent = "";
+                  for (const item of event.response.output) {
+                    if (item.type === "message" && item.role === "assistant") {
+                      if (item.content && Array.isArray(item.content)) {
+                        for (const part of item.content) {
+                          if (part.type === "text" || part.type === "output_text") {
+                            responseContent += part.text || "";
+                          }
+                        }
+                      }
+                    }
+                  }
+                  
+                  // Make sure we have some content to log
+                  if (!responseContent && event.response.output.length > 0) {
+                    // Try to extract any text content from the output
+                    for (const item of event.response.output) {
+                      if (item.content && Array.isArray(item.content)) {
+                        for (const part of item.content) {
+                          if ((part.type === "text" || part.type === "output_text" || part.type === "input_text") && part.text) {
+                            responseContent += part.text;
+                          }
+                        }
+                      }
+                    }
+                  }
+                  
                   logApiCall(
                     this.sessionId,
                     this.provider === "openai" ? "responses.create" : "chat.completions",
@@ -1026,7 +1065,9 @@ export class AgentLoop {
                     inputTokens,
                     outputTokens,
                     usage.total_tokens,
-                    undefined // Duration was already logged when call was made
+                    undefined, // Duration was already logged when call was made
+                    undefined, // Prompt was logged earlier
+                    responseContent
                   ).catch(err => log(`Failed to log API call tokens: ${err}`));
                 }
                 
@@ -1425,11 +1466,11 @@ export class AgentLoop {
         try {
           // Log the error to conversation archive
           logError(this.sessionId, "Network error", {
-            code: err instanceof Error ? (err as any).code : "unknown",
+            code: err instanceof Error ? (err as Error & {code?: string}).code : "unknown",
             stack: err instanceof Error ? err.stack : undefined,
             context: {
               model: this.model,
-              status: err instanceof Error ? (err as any).status : undefined
+              status: err instanceof Error ? (err as Error & {status?: number}).status : undefined
             }
           }).catch(e => log(`Failed to log error: ${e}`));
           
@@ -1457,8 +1498,15 @@ export class AgentLoop {
         if (!err || typeof err !== "object") {
           return false;
         }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const e: any = err;
+        // Use more specific type instead of any
+        const e = err as {
+          type?: string;
+          code?: string;
+          cause?: {
+            type?: string;
+            code?: string;
+          }
+        };
 
         if (
           e.type === "invalid_request_error" &&
@@ -1481,9 +1529,21 @@ export class AgentLoop {
       if (isInvalidRequestError()) {
         try {
           // Extract request ID and error details from the error object
-
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const e: any = err;
+          const e = err as {
+            status?: number;
+            code?: string;
+            type?: string;
+            message?: string;
+            request_id?: string;
+            cause?: {
+              status?: number;
+              code?: string;
+              type?: string;
+              message?: string;
+              request_id?: string;
+              requestId?: string;
+            }
+          };
 
           const reqId =
             e.request_id ??

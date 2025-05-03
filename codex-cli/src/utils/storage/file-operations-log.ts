@@ -1,8 +1,11 @@
-import fs from "fs/promises";
-import path from "path";
-import os from "os";
+import type { ConversationLog } from "./save-rollout.js";
+
 import { log } from "../logger/log.js";
 import { getSessionId } from "../session.js";
+import fs from "fs/promises";
+import os from "os";
+import path from "path";
+
 
 const LOGS_ROOT = path.join(os.homedir(), ".codex", "logs");
 
@@ -68,10 +71,10 @@ export async function logFileOperation(
     const logFilePath = path.join(LOGS_ROOT, filename);
     
     // Read existing log file or create new structure
-    let logData: any;
+    let logData: Partial<ConversationLog>;
     try {
       const fileContent = await fs.readFile(logFilePath, "utf8");
-      logData = JSON.parse(fileContent);
+      logData = JSON.parse(fileContent) as Partial<ConversationLog>;
     } catch (error) {
       // File doesn't exist or can't be parsed, create new log structure
       logData = {
@@ -112,7 +115,7 @@ export async function readFileWithLogging(
   const startTime = Date.now();
   let success = false;
   let error: Error | undefined;
-  let content: string | Buffer;
+  let content: string | Buffer | undefined;
   
   try {
     content = await fs.readFile(filePath, options);
@@ -123,11 +126,13 @@ export async function readFileWithLogging(
     throw error;
   } finally {
     const duration = Date.now() - startTime;
-    const size = success && typeof content === "string" 
-      ? Buffer.byteLength(content, "utf8") 
-      : success && Buffer.isBuffer(content) 
-        ? content.length 
-        : undefined;
+    const size = success && content ? (
+      typeof content === "string" 
+        ? Buffer.byteLength(content, "utf8") 
+        : Buffer.isBuffer(content) 
+          ? content.length 
+          : undefined
+    ) : undefined;
         
     logFileOperation("read", filePath, {
       size,

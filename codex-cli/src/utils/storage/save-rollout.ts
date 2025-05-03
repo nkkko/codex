@@ -1,3 +1,4 @@
+import type { FileOperationLogEntry } from "./file-operations-log";
 import type { ResponseItem } from "openai/resources/responses/responses";
 
 import { loadConfig } from "../config";
@@ -6,11 +7,10 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 
-const SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions");
-const LOGS_ROOT = path.join(os.homedir(), ".codex", "logs");
 
-// Import the FileOperationLogEntry type from file-operations-log.ts
-import type { FileOperationLogEntry } from "./file-operations-log";
+// Deprecated - using LOGS_ROOT for all files now
+// const SESSIONS_ROOT = path.join(os.homedir(), ".codex", "sessions");
+const LOGS_ROOT = path.join(os.homedir(), ".codex", "logs");
 
 export interface ConversationLog {
   session: {
@@ -24,6 +24,11 @@ export interface ConversationLog {
     status?: "active" | "completed" | "interrupted" | "errored";
   };
   items: Array<ResponseItem>;
+  messages?: Array<{
+    timestamp: string;
+    role: string;
+    content: string;
+  }>;
   toolCalls?: Array<ToolCallData>;
   apiCalls?: Array<ApiCallData>;
   fileOperations?: Array<FileOperationLogEntry>;
@@ -40,12 +45,13 @@ async function saveRolloutAsync(
   sessionId: string,
   items: Array<ResponseItem>,
 ): Promise<void> {
-  await fs.mkdir(SESSIONS_ROOT, { recursive: true });
+  // Use the same logs directory as the conversation logs
+  await fs.mkdir(LOGS_ROOT, { recursive: true });
 
   const timestamp = new Date().toISOString();
   const ts = timestamp.replace(/[:.]/g, "-").slice(0, 10);
   const filename = `rollout-${ts}-${sessionId}.json`;
-  const filePath = path.join(SESSIONS_ROOT, filename);
+  const filePath = path.join(LOGS_ROOT, filename);
   const config = loadConfig();
 
   try {
@@ -138,6 +144,8 @@ export function logApiCall(
   outputTokens?: number, 
   totalTokens?: number,
   durationMs?: number,
+  prompt?: string,
+  response?: string,
 ): Promise<void> {
   return appendToConversationLog(sessionId, "apiCalls", {
     timestamp: new Date().toISOString(),
@@ -147,7 +155,130 @@ export function logApiCall(
     outputTokens,
     totalTokens,
     durationMs,
+    prompt,
+    response,
   });
+}
+
+/**
+ * Updates the items array in the conversation log with the latest conversation state
+ * Also extracts message content for easier analysis
+ */
+export async function updateConversationItems(
+  sessionId: string,
+  items: Array<ResponseItem>
+): Promise<void> {
+  if (!sessionId || !items || items.length === 0) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const dateStr = timestamp.replace(/[:.]/g, "-").slice(0, 10);
+  const filename = `conversation-${dateStr}-${sessionId}.json`;
+  const filePath = path.join(LOGS_ROOT, filename);
+  
+  try {
+    // Ensure logs directory exists
+    await fs.mkdir(LOGS_ROOT, { recursive: true });
+    
+    // Read existing log or create new one
+    let conversationLog: ConversationLog;
+    try {
+      const fileContent = await fs.readFile(filePath, 'utf8');
+      conversationLog = JSON.parse(fileContent);
+    } catch (error) {
+      // Create new log if file doesn't exist
+      conversationLog = {
+        session: {
+          timestamp: new Date().toISOString(),
+          id: sessionId,
+          instructions: loadConfig().instructions || "",
+          model: loadConfig().model,
+          startedAt: new Date().toISOString(),
+          status: "active"
+        },
+        items: [],
+        messages: [],
+      };
+    }
+    
+    // Update items array
+    conversationLog.items = items;
+    
+    // Extract message content for easier analysis
+    if (!conversationLog.messages) {
+      conversationLog.messages = [];
+    }
+    
+    // Extract user and assistant messages carefully to avoid duplicates
+    
+    // First, let's analyze what messages we already have in the log
+    const existingContentByRole: Record<string, Set<string>> = {
+      user: new Set(),
+      assistant: new Set(),
+    };
+    
+    // Create an initial snapshot of existing messages
+    if (conversationLog.messages && conversationLog.messages.length > 0) {
+      for (const msg of conversationLog.messages) {
+        if (msg.role === "user" || msg.role === "assistant") {
+          existingContentByRole[msg.role].add(msg.content);
+        }
+      }
+    } else {
+      // Initialize empty messages array if it doesn't exist
+      conversationLog.messages = [];
+    }
+    
+    // Process new items to extract messages, adding only new ones
+    const newMessages: Array<{timestamp: string; role: string; content: string}> = [];
+    
+    for (const item of items) {
+      if (item.type === "message" && (item.role === "user" || item.role === "assistant")) {
+        // Format content as string
+        let content = "";
+        if (item.content && Array.isArray(item.content)) {
+          for (const part of item.content) {
+            if (part.type === "text" || part.type === "input_text" || part.type === "output_text") {
+              content += part.text || "";
+            } else if (part.type === "image" && part.source) {
+              content += `[Image: ${part.source.data || part.source.url || "embedded"}]`;
+            }
+          }
+        }
+        
+        // Skip empty content
+        if (!content) {
+          continue;
+        }
+        
+        // Skip if we already have this exact content for this role
+        if (existingContentByRole[item.role].has(content)) {
+          continue;
+        }
+        
+        // Add to new messages
+        newMessages.push({
+          timestamp: item.created_at || new Date().toISOString(),
+          role: item.role,
+          content: content
+        });
+        
+        // Mark as processed
+        existingContentByRole[item.role].add(content);
+      }
+    }
+    
+    // Add only new messages to the log
+    if (newMessages.length > 0) {
+      conversationLog.messages.push(...newMessages);
+    }
+    
+    // Write updated log
+    await fs.writeFile(filePath, JSON.stringify(conversationLog, null, 2), 'utf8');
+  } catch (error) {
+    log(`Error updating conversation items: ${error}`);
+  }
 }
 
 /**
@@ -273,6 +404,8 @@ type ApiCallData = {
   outputTokens?: number;
   totalTokens?: number;
   durationMs?: number;
+  prompt?: string;
+  response?: string;
 };
 
 type ErrorLogData = {
@@ -320,9 +453,9 @@ async function appendToConversationLog(
 
     // Add data to section (type assertion to handle section-specific data types)
     if (section === "toolCalls" && "toolName" in data) {
-      (conversationLog.toolCalls as ToolCallData[])?.push(data as ToolCallData);
+      (conversationLog.toolCalls as Array<ToolCallData>)?.push(data as ToolCallData);
     } else if (section === "apiCalls" && "endpoint" in data) {
-      (conversationLog.apiCalls as ApiCallData[])?.push(data as ApiCallData);
+      (conversationLog.apiCalls as Array<ApiCallData>)?.push(data as ApiCallData);
     } else if (section === "errors" && "message" in data) {
       if (!conversationLog.errors) {
         conversationLog.errors = [];

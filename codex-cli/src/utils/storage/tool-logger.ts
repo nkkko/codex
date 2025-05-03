@@ -1,6 +1,6 @@
-import { logToolCall } from "./save-rollout.js";
-import { getSessionId } from "../session.js";
 import { log } from "../logger/log.js";
+import { getSessionId } from "../session.js";
+import { logToolCall } from "./save-rollout.js";
 
 // Type definitions for various tool functions
 export type GlobToolParams = {
@@ -66,7 +66,7 @@ export async function withToolLogging<T>(
   }
 
   const startTime = Date.now();
-  let result: T;
+  let result: T | undefined;
   let error: Error | undefined;
   
   try {
@@ -84,7 +84,7 @@ export async function withToolLogging<T>(
     try {
       if (result === undefined) {
         resultStr = "undefined";
-      } else if (result === null) {
+      } else if (result == null) {
         resultStr = "null";
       } else if (typeof result === "object") {
         resultStr = JSON.stringify(result);
@@ -116,9 +116,11 @@ export async function withToolLogging<T>(
 export async function logGlobTool(
   pattern: string,
   path?: string
-): Promise<string[]> {
+): Promise<Array<string>> {
   const args: GlobToolParams = { pattern };
-  if (path) args.path = path;
+  if (path) {
+    args.path = path;
+  }
   
   // Here you would call the actual GlobTool function
   return withToolLogging("glob", args, async () => {
@@ -135,10 +137,14 @@ export async function logGrepTool(
   pattern: string,
   path?: string,
   include?: string
-): Promise<string[]> {
+): Promise<Array<string>> {
   const args: GrepToolParams = { pattern };
-  if (path) args.path = path;
-  if (include) args.include = include;
+  if (path) {
+    args.path = path;
+  }
+  if (include) {
+    args.include = include;
+  }
   
   return withToolLogging("grep", args, async () => {
     // Placeholder - in real implementation, call the actual GrepTool function here
@@ -155,8 +161,12 @@ export async function logViewTool(
   limit?: number
 ): Promise<string> {
   const args: ViewParams = { file_path };
-  if (offset !== undefined) args.offset = offset;
-  if (limit !== undefined) args.limit = limit;
+  if (offset !== undefined) {
+    args.offset = offset;
+  }
+  if (limit !== undefined) {
+    args.limit = limit;
+  }
   
   return withToolLogging("view", args, async () => {
     // Placeholder - in real implementation, call the actual View function here
@@ -174,7 +184,9 @@ export async function logEditTool(
   expected_replacements?: number
 ): Promise<string> {
   const args: EditParams = { file_path, old_string, new_string };
-  if (expected_replacements !== undefined) args.expected_replacements = expected_replacements;
+  if (expected_replacements !== undefined) {
+    args.expected_replacements = expected_replacements;
+  }
   
   return withToolLogging("edit", args, async () => {
     // Placeholder - in real implementation, call the actual Edit function here
