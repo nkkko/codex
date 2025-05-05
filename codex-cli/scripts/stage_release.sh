@@ -10,14 +10,17 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 RELEASE_DIR="${1:-$(mktemp -d)}"
 [ -n "${1-}" ] && shift
 
+# Ensure the release directory exists
+mkdir -p "$RELEASE_DIR"
+
 # Compile the JavaScript.
-pnpm install
-pnpm build
-mkdir "$RELEASE_DIR/bin"
+npm install
+npm run build
+mkdir -p "$RELEASE_DIR/bin"
 cp -r bin/codex.js "$RELEASE_DIR/bin/codex.js"
 cp -r dist "$RELEASE_DIR/dist"
 cp -r src "$RELEASE_DIR/src" # important if we want sourcemaps to continue to work
-cp ../README.md "$RELEASE_DIR"
+cp -f README.md "$RELEASE_DIR" || echo "README.md not found, continuing anyway"
 # TODO: Derive version from Git tag.
 VERSION=$(printf '0.1.%d' "$(date +%y%m%d%H%M)")
 jq --arg version "$VERSION" '.version = $version' package.json > "$RELEASE_DIR/package.json"
