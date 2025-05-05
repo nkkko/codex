@@ -15,7 +15,7 @@ import { getFileSystemSuggestions } from "../../utils/file-system-suggestions.js
 import { expandFileTags } from "../../utils/file-tag-utils";
 import { createInputItem } from "../../utils/input-utils.js";
 import { log } from "../../utils/logger/log.js";
-import { setSessionId } from "../../utils/session.js";
+import { getSessionId, setSessionId } from "../../utils/session.js";
 import { SLASH_COMMANDS, type SlashCommand } from "../../utils/slash-commands";
 import {
   loadCommandHistory,
@@ -38,6 +38,270 @@ const suggestions = [
   "fix any build errors",
   "are there any bugs in my code?",
 ];
+
+// Helper function for generating reports to avoid duplicate execution
+// Use a module-level variable to track if a report is currently being generated
+let isGeneratingReport = false;
+
+async function handleReportCommand(
+  sessionId: string, 
+  items: Array<ResponseItem>, 
+  setItems: React.Dispatch<React.SetStateAction<Array<ResponseItem>>>
+): Promise<void> {
+  // If already generating a report, don't start another one
+  if (isGeneratingReport) {
+    return;
+  }
+  
+  // Set flag to prevent multiple simultaneous report generations
+  isGeneratingReport = true;
+  try {
+    const { loadConfig } = await import("../../utils/config.js");
+    const { logConversation, updateConversationItems } = await import(
+      "../../utils/storage/save-rollout.js"
+    );
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const os = await import("os");
+    
+    const LOGS_ROOT = path.join(os.homedir(), ".codex", "logs");
+    
+    // Ensure sessionId is provided
+    if (!sessionId) {
+      setItems((prev) => [
+        ...prev,
+        {
+          id: `report-error-${Date.now()}`,
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: `⚠️ No active session found. Start a conversation first.`,
+            },
+          ],
+        },
+      ]);
+      return;
+    }
+    
+    // First, ensure that the current items are saved to the log file
+    if (items && items.length > 0) {
+      await updateConversationItems(sessionId, items);
+    }
+    
+    // Look for conversation logs for this session
+    await fs.mkdir(LOGS_ROOT, { recursive: true });
+    const files = await fs.readdir(LOGS_ROOT);
+    const sessionFiles = files.filter(file => 
+      file.includes(sessionId) && file.startsWith('conversation-')
+    );
+    
+    if (sessionFiles.length === 0) {
+      // Generate a new report from the current terminal state
+      const conversationLog = {
+        session: {
+          timestamp: new Date().toISOString(),
+          id: sessionId,
+          instructions: loadConfig().instructions || "",
+          model: loadConfig().model,
+          startedAt: new Date().toISOString(),
+          status: "active"
+        },
+        items: items || [],
+      };
+      
+      // Save the log
+      const logPath = await logConversation(conversationLog);
+      
+      // Generate a unique ID for this report
+      const reportId = `report-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      
+      setItems((prev) => [
+        ...prev,
+        {
+          id: reportId,
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: `✓ Generated new conversation report at ${logPath}`,
+            },
+          ],
+        },
+      ]);
+      return;
+    }
+    
+    // If we found logs, show the most recent one
+    const mostRecent = sessionFiles.sort().pop()!;
+    const filePath = path.join(LOGS_ROOT, mostRecent);
+    
+    // Read and display summary
+    const fileContent = await fs.readFile(filePath, 'utf8');
+    const log = JSON.parse(fileContent) as {
+      session: {
+        timestamp: string;
+        id: string;
+        instructions: string;
+        model?: string;
+        startedAt?: string;
+        endedAt?: string;
+        status?: string;
+      };
+      items: Array<ResponseItem>;
+      messages?: Array<{
+        role: string;
+        content: string;
+        timestamp: string;
+      }>;
+      toolCalls?: Array<{
+        timestamp: string;
+        toolName: string;
+        args: Record<string, unknown>;
+        result: string;
+        exitCode?: number;
+        durationMs?: number;
+      }>;
+      apiCalls?: Array<{
+        timestamp: string;
+        endpoint: string;
+        requestId?: string;
+        inputTokens?: number;
+        outputTokens?: number;
+        totalTokens?: number;
+        durationMs?: number;
+        prompt?: string;
+        response?: string;
+      }>;
+      fileOperations?: Array<{
+        timestamp: string;
+        type: string;
+        path: string;
+        success: boolean;
+      }>;
+      errors?: Array<{
+        timestamp: string;
+        message: string;
+      }>;
+    };
+    
+    // Create summary
+    const toolCallCount = log.toolCalls?.length || 0;
+    const apiCallCount = log.apiCalls?.length || 0;
+    const fileOpCount = log.fileOperations?.length || 0;
+    const errorCount = log.errors?.length || 0;
+    const messageCount = log.messages?.length || log.items.length || 0;
+    const startTime = log.session.startedAt 
+      ? new Date(log.session.startedAt) 
+      : new Date(log.session.timestamp);
+    const endTime = log.session.endedAt ? new Date(log.session.endedAt) : null;
+    const sessionStatus = log.session.status || "active";
+    
+    // Count token usage if available
+    let totalTokens = 0;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    
+    if (log.apiCalls) {
+      for (const call of log.apiCalls) {
+        if (call.totalTokens) {totalTokens += call.totalTokens;}
+        if (call.inputTokens) {totalInputTokens += call.inputTokens;}
+        if (call.outputTokens) {totalOutputTokens += call.outputTokens;}
+      }
+    }
+
+    // Calculate session duration
+    let durationText = "In progress";
+    if (endTime && startTime) {
+      const durationMs = endTime.getTime() - startTime.getTime();
+      const durationMinutes = Math.floor(durationMs / 60000);
+      const durationSeconds = Math.floor((durationMs % 60000) / 1000);
+      durationText = `${durationMinutes}m ${durationSeconds}s`;
+    }
+    
+    // Count file operations by type if available
+    const fileOpTypes: Record<string, number> = {};
+    if (log.fileOperations) {
+      for (const op of log.fileOperations) {
+        const type = op.type;
+        fileOpTypes[type] = (fileOpTypes[type] || 0) + 1;
+      }
+    }
+    
+    // Generate a unique ID for this report
+    const reportId = `report-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    
+    let summary = `📊 Conversation Report: ${mostRecent}\n\n`;
+    summary += `Session ID: ${log.session.id}\n`;
+    summary += `Status: ${sessionStatus}\n`;
+    summary += `Started: ${startTime.toLocaleString()}\n`;
+    if (endTime) {
+      summary += `Ended: ${endTime.toLocaleString()}\n`;
+    }
+    summary += `Duration: ${durationText}\n`;
+    summary += `Messages: ${messageCount}\n`;
+    summary += `Tool Calls: ${toolCallCount}\n`;
+    summary += `API Calls: ${apiCallCount}\n`;
+    summary += `File Operations: ${fileOpCount}\n`;
+    
+    if (errorCount > 0) {
+      summary += `Errors: ${errorCount}\n`;
+    }
+    
+    if (totalTokens > 0) {
+      summary += `\nToken Usage:\n`;
+      summary += `    * Input: ${totalInputTokens.toLocaleString()}\n`;
+      summary += `    * Output: ${totalOutputTokens.toLocaleString()}\n`;
+      summary += `    * Total: ${totalTokens.toLocaleString()}\n`;
+    }
+    
+    // Include file operation breakdown if available
+    if (Object.keys(fileOpTypes).length > 0) {
+      summary += `\nFile Operations:\n`;
+      for (const [type, count] of Object.entries(fileOpTypes)) {
+        summary += `    * ${type}: ${count}\n`;
+      }
+    }
+    
+    summary += `\nLog file: ${filePath}`;
+    
+    setItems((prev) => [
+      ...prev,
+      {
+        id: reportId,
+        type: "message",
+        role: "system",
+        content: [
+          {
+            type: "input_text",
+            text: summary,
+          },
+        ],
+      },
+    ]);
+  } catch (error) {
+    // If anything went wrong, notify the user.
+    setItems((prev) => [
+      ...prev,
+      {
+        id: `report-error-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        type: "message",
+        role: "system",
+        content: [
+          {
+            type: "input_text",
+            text: `⚠️ Failed to generate conversation report: ${error}`,
+          },
+        ],
+      },
+    ]);
+  } finally {
+    // Always reset the flag when done
+    isGeneratingReport = false;
+  }
+}
 
 export default function TerminalChatInput({
   isNew,
@@ -272,6 +536,8 @@ export default function TerminalChatInput({
             const selIdx = selectedSlashSuggestion;
             const cmdObj = matches[selIdx];
             if (cmdObj) {
+              // Log the command being executed
+              log(`Executing slash command: ${cmdObj.command}`);
               const cmd = cmdObj.command;
               setInput("");
               setDraftInput("");
@@ -303,6 +569,13 @@ export default function TerminalChatInput({
                   break;
                 case "/clearhistory":
                   onSubmit(cmd);
+                  break;
+                case "/report":
+                  // Instead of handling report here, set a flag that we'll check in onSubmit
+                  setInput("");
+                  // Don't call handleReportCommand here - it's causing duplication
+                  // Just mark that the command was processed
+                  setSkipNextSubmit(true);
                   break;
                 default:
                   break;
@@ -577,6 +850,17 @@ export default function TerminalChatInput({
           },
         );
 
+        return;
+      } else if (inputValue === "/report") {
+        // Handle report command but only if not already handling it
+        setInput("");
+        log("onSubmit processing /report command");
+        // Only proceed if not already generating a report
+        if (!isGeneratingReport) {
+          await handleReportCommand(getSessionId(), items, setItems);
+        } else {
+          log("Report generation already in progress, skipping");
+        }
         return;
       } else if (inputValue === "/bug") {
         // Generate a GitHub bug report URL pre‑filled with session details.
